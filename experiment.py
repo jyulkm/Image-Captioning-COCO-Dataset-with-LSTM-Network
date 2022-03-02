@@ -40,14 +40,19 @@ class Experiment(object):
         self.__current_epoch = 0
         self.__training_losses = []
         self.__val_losses = []
-        self.__best_model = None  # Save your best model in this field and use this in test method.
+        # Save your best model in this field and use this in test method.
+        self.__best_model = None
+        self.learning_rate = config_data['experiment']['learning_rate']
 
         # Init Model
         self.__model = get_model(config_data, self.__vocab)
+        self.__encoder, self.__decoder = self.__model.encoder, self.__model.decoder
 
         # TODO: Set these Criterion and Optimizers Correctly
-        self.__criterion = None
-        self.__optimizer = None
+        params = list(self.__decoder.parameters()) + \
+            list(self.__encoder.resnet.fc.parameters())
+        self.__criterion = torch.nn.CrossEntropyLoss()
+        self.__optimizer = torch.optim.Adam(params, lr=self.learning_rate)
 
         self.__init_model()
 
@@ -59,11 +64,14 @@ class Experiment(object):
         os.makedirs(ROOT_STATS_DIR, exist_ok=True)
 
         if os.path.exists(self.__experiment_dir):
-            self.__training_losses = read_file_in_dir(self.__experiment_dir, 'training_losses.txt')
-            self.__val_losses = read_file_in_dir(self.__experiment_dir, 'val_losses.txt')
+            self.__training_losses = read_file_in_dir(
+                self.__experiment_dir, 'training_losses.txt')
+            self.__val_losses = read_file_in_dir(
+                self.__experiment_dir, 'val_losses.txt')
             self.__current_epoch = len(self.__training_losses)
 
-            state_dict = torch.load(os.path.join(self.__experiment_dir, 'latest_model.pt'))
+            state_dict = torch.load(os.path.join(
+                self.__experiment_dir, 'latest_model.pt'))
             self.__model.load_state_dict(state_dict['model'])
             self.__optimizer.load_state_dict(state_dict['optimizer'])
 
@@ -72,13 +80,15 @@ class Experiment(object):
 
     def __init_model(self):
         if torch.cuda.is_available():
-            self.__model = self.__model.cuda().float()
+            self.__encoder = self.__encoder.cuda().float()
+            self.__decoder = self.__decoder.cuda().float()
             self.__criterion = self.__criterion.cuda()
 
     # Main method to run your experiment. Should be self-explanatory.
     def run(self):
         start_epoch = self.__current_epoch
-        for epoch in range(start_epoch, self.__epochs):  # loop over the dataset multiple times
+        # loop over the dataset multiple times
+        for epoch in range(start_epoch, self.__epochs):
             start_time = datetime.now()
             self.__current_epoch = epoch
             train_loss = self.__train()
@@ -89,14 +99,31 @@ class Experiment(object):
 
     # TODO: Perform one training iteration on the whole dataset and return loss value
     def __train(self):
-        self.__model.train()
+        self.__decoder.train()
+        self.__encoder.train()
+
         training_loss = 0
+        running_loss = 0
 
-        # Iterate over the data, implement the training function
         for i, (images, captions, _) in enumerate(self.__train_loader):
-            raise NotImplementedError()
+            images, captions = images.cuda(), captions.cuda()
 
-        return training_loss
+            self.__optimizer.zero_grad()
+
+            features = self.__encoder(images)
+            outputs = self.__decoder(features, captions)
+
+            # Calculate the loss.
+            loss = self.__criterion(
+                outputs.view(-1, self.__vocab.__len__()), captions.view(-1))
+            loss.backward()
+            self.__optimizer.step()
+
+            # collect loss
+            running_loss += loss.item()
+
+        # Avg. the loss accumulated across entire data set
+        training_loss = mean(running_loss)
 
     # TODO: Perform one Pass on the validation set and return loss value. You may also update your best model here.
     def __val(self):
@@ -130,9 +157,11 @@ class Experiment(object):
         return test_loss, bleu1, bleu4
 
     def __save_model(self):
-        root_model_path = os.path.join(self.__experiment_dir, 'latest_model.pt')
+        root_model_path = os.path.join(
+            self.__experiment_dir, 'latest_model.pt')
         model_dict = self.__model.state_dict()
-        state_dict = {'model': model_dict, 'optimizer': self.__optimizer.state_dict()}
+        state_dict = {'model': model_dict,
+                      'optimizer': self.__optimizer.state_dict()}
         torch.save(state_dict, root_model_path)
 
     def __record_stats(self, train_loss, val_loss):
@@ -141,8 +170,10 @@ class Experiment(object):
 
         self.plot_stats()
 
-        write_to_file_in_dir(self.__experiment_dir, 'training_losses.txt', self.__training_losses)
-        write_to_file_in_dir(self.__experiment_dir, 'val_losses.txt', self.__val_losses)
+        write_to_file_in_dir(self.__experiment_dir,
+                             'training_losses.txt', self.__training_losses)
+        write_to_file_in_dir(self.__experiment_dir,
+                             'val_losses.txt', self.__val_losses)
 
     def __log(self, log_str, file_name=None):
         print(log_str)
@@ -152,7 +183,8 @@ class Experiment(object):
 
     def __log_epoch_stats(self, start_time):
         time_elapsed = datetime.now() - start_time
-        time_to_completion = time_elapsed * (self.__epochs - self.__current_epoch - 1)
+        time_to_completion = time_elapsed * \
+            (self.__epochs - self.__current_epoch - 1)
         train_loss = self.__training_losses[self.__current_epoch]
         val_loss = self.__val_losses[self.__current_epoch]
         summary_str = "Epoch: {}, Train Loss: {}, Val Loss: {}, Took {}, ETA: {}\n"

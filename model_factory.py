@@ -16,12 +16,23 @@ class resnet(nn.Module):
         # Changes the last layer of the pretrained model
         self.resnet.fc = nn.Linear(fc_input_feat_n, embed_size)
 
+        for name, param in self.resnet.named_parameters():
+            if 'fc' in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
     def __call__(self, img):
-        self.forward(img)
+        features = self.forward(img)
+        print(features)
+        return features
 
     def forward(self, img):
-        ...
-        # make sure to normalize output data
+        features = self.resnet(img)
+        print(features)
+        return features
+
+        # make sure to normalize output data (writeup says to transform image data)
 
 
 class LSTM(nn.Module):
@@ -29,7 +40,7 @@ class LSTM(nn.Module):
         super().__init__()
 
         # Defining the emedding layer
-        self.embedding_layer = nn.Embedding(vocab_size, embed_size)
+        self.embedding = nn.Embedding(vocab_size, embed_size)
 
         # Defining the LSTM model
         self.lstm = nn.LSTM(
@@ -42,77 +53,54 @@ class LSTM(nn.Module):
 
         self.linear = nn.Linear(hidden_size, vocab_size)
 
-    def __call__(self, features, captions, vocab):
-        self.generate_caption()
+    def __call__(self, features, captions):
+        self.forward()
 
-    def generate_caption():
-        caption = []
-        self.generate_first_token(caption, img)
-        self.generate_susequet_tokens(caption)
+    def forward(self, features, captions):
+        token_ids = []
+        hidden_state = cell_state = 0
 
-    def generate_first_token(caption, img):
+        # reshape features from 2d to 3d: lstm requires a 3d tensor
+        features = features.unsqueeze(1).repeat(1, embed.shape[1], 1)
 
-        word = ...
-        caption.append(word)
+        # pad captions to ensure same length: required to put all captions across a minibatch in one tensor
+        captions = torch.nn.functional.pad(
+            input=captions, pad=(1, 0), mode='constant', value=0)
 
-    def generate_subsequent_tokens(caption):
-        eos = False
+        # embed captions to convert sparse one-hot-encoded matrix to something else
+        captions = self.embedding(captions)
 
-        while not eos:
-            eos = generate_subsequent_token()
+        # combine features and captions to feed the LSTM model
+        combined_input = torch.cat((features, captions), dim=2)
 
-    def generate_subsequent_token(caption):
-        softmax = self.forward()
-        word = argmax(softmax)
+        max_len = config_data['generation']['max_length']
+        for t in range(max_len):
+            output, (hidden_state, cell_state) = self.lstm(
+                combined_input, hidden_state, cell_state)
+            output = output.squeeze(1)
+            output = self.linear(output)
 
-        if word != 'EOS':
-            return True
-
-        else:
-            caption.append(word)
-            return False
-
-    def forward(self, features, captions, vocab):
-        if len(captions) == 0:
-            first = self.lstm(input, (h0, c0))
-            return first
-
-        captions.append(...)
-
-        return eos
-
-        ...
+            token_id = outputs.argmax(1).cpu().detach().numpy()
+            token_ids.append(token_id)
 
 
-def baseline(img):
-    # We suggest as a baseline model to use 2 layers of 512 LSTM units each, followed by a fully-connected layer to the softmax output.
-    captions = []
+class baseline:
+    def __init__(self, hidden_size, embedding_size, vocab_size, num_layers):
+        # We suggest as a baseline model to use 2 layers of 512 LSTM units each, followed by a fully-connected layer to the softmax output.
 
-    hidden_state = cell_state = 0
-    hidden_states = (hidden_state, cell_state)
+        hidden_state = cell_state = 0
+        hidden_states = (hidden_state, cell_state)
 
-    # first step
-    EMBED_SIZE = 300
+        self.encoder = resnet(embedding_size)
+        self.decoder = LSTM(embedding_size, hidden_size,
+                            vocab_size, num_layers)
 
-    cnn = resnet(EMBED_SIZE)
-    feature_vec = cnn(img)
+    def __call__(img):
+        self.forward(img)
 
-    initial_generator = LSTM(embed_size, hidden_size,
-                             vocab_size, num_layers)  # first word of caption
-    caption[0] = initial_generator(features, captions, vocab)
-
-    caption
-
-    # second step
-    input = start
-    output = first word
-
-
-def loss_fnc():
-    """
-    automatically combines both softmax and negative log likelihood loss
-    """
-    CrossEntropyLoss
+    def forward(img):
+        feature_vectors = self.encoder.forward(img)
+        self.decoder(feature_vector)
 
 
 def get_start(img):
@@ -129,7 +117,7 @@ def get_start(img):
 # Build and return the model here based on the configuration.
 
 
-def get_model(config_data, vocab):
+def get_model(config_data, vocab, num_layers=2):
     """
     # pseudo code structure
     resnet_data = resnet()
@@ -140,5 +128,9 @@ def get_model(config_data, vocab):
     hidden_size = config_data['model']['hidden_size']
     embedding_size = config_data['model']['embedding_size']
     model_type = config_data['model']['model_type']
+    vocab_size = vocab.idx
+
+    if model_type == 'RNN':
+        return baseline(hidden_size, embedding_size, vocab_size, num_layers)
 
     # only use hidden step to generate the output

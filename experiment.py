@@ -76,7 +76,8 @@ class Experiment(object):
             self.__optimizer.load_state_dict(state_dict['optimizer'])
 
         else:
-            os.makedirs(self.__experiment_dir)
+            ...
+#             os.makedirs(self.__experiment_dir)
 
     def __init_model(self):
         if torch.cuda.is_available():
@@ -99,8 +100,8 @@ class Experiment(object):
 
     # TODO: Perform one training iteration on the whole dataset and return loss value
     def __train(self):
-        self.__decoder.train()
-        self.__encoder.train()
+        self.__encoder.resnet.train()
+        self.__decoder.lstm.train()
 
         training_loss = 0
         running_loss = 0
@@ -110,12 +111,11 @@ class Experiment(object):
 
             self.__optimizer.zero_grad()
 
-            features = self.__encoder(images)
-            outputs = self.__decoder(features, captions)
+            output = self.__model(images, captions)
 
             # Calculate the loss.
             loss = self.__criterion(
-                outputs.view(-1, self.__vocab.__len__()), captions.view(-1))
+                output.view(-1, self.__vocab.__len__()), captions.view(-1))
             loss.backward()
             self.__optimizer.step()
 
@@ -124,6 +124,8 @@ class Experiment(object):
 
         # Avg. the loss accumulated across entire data set
         training_loss = mean(running_loss)
+
+        return training_loss
 
     # TODO: Perform one Pass on the validation set and return loss value. You may also update your best model here.
     def __val(self):
@@ -165,6 +167,8 @@ class Experiment(object):
         torch.save(state_dict, root_model_path)
 
     def __record_stats(self, train_loss, val_loss):
+        print('$$$$$$$$$$$$$$$$$$$$$$$$$')
+        print(train_loss)
         self.__training_losses.append(train_loss)
         self.__val_losses.append(val_loss)
 

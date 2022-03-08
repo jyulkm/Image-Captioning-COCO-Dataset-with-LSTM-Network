@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 from coco_dataset import collate_fn
+import numpy as np
 
 
 class resnet(nn.Module):
@@ -85,7 +86,6 @@ class LSTM(nn.Module):
         features = self.transform_features(features, word_count)
 
         # reshape captions
-        print(features.shape)
         image_count = features.shape[0]
         captions = self.transform_captions(captions, image_count)
 
@@ -120,7 +120,7 @@ class baseline:
         if captions != None:
             return self.train(image, captions)
         else:
-            self.test(image)
+            return self.test(image)
 
     def train(self, image, captions):
         """
@@ -157,14 +157,11 @@ class baseline:
                 token_id = nn.functional.softmax(
                     output.div(temperature)).multinomial(1).view(-1)
 
-            print(token_id)
             token_ids.append(token_id.cpu().numpy())
             captions = token_id.unsqueeze(-1)
-            token_ids_t[t, :, :] = output
+#             token_ids_t[t, :, :] = output
 
-        return token_ids_t
-
-        return output
+        return np.array(token_ids)
 
     def deterministic_caption_generator(self, image, captions):
         token_ids = []

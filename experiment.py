@@ -54,6 +54,7 @@ class Experiment(object):
         params = list(self.__decoder.parameters()) + \
             list(self.__encoder.resnet.fc.parameters())
         self.__criterion = torch.nn.CrossEntropyLoss()
+        self.__criterion2 = nn.functional.nll_loss
         self.__optimizer = torch.optim.Adam(params, lr=self.learning_rate)
 
         self.__init_model()
@@ -74,7 +75,7 @@ class Experiment(object):
 
             state_dict = torch.load(os.path.join(
                 self.__experiment_dir, 'latest_model.pt'))
-            self.__model.load_state_dict(state_dict['model'])
+            self.__decoder.load_state_dict(state_dict['model'])
             self.__optimizer.load_state_dict(state_dict['optimizer'])
 
         else:
@@ -106,8 +107,8 @@ class Experiment(object):
 
         self.__optimizer.zero_grad()
 
-        running_loss = []
-
+        running_loss = 0
+        counter = 0
         for i, (images, captions, _) in enumerate(self.__train_loader):
             images, captions = images.cuda(), captions.cuda()
 
@@ -120,45 +121,51 @@ class Experiment(object):
             self.__optimizer.step()
 
             # collect loss
-            running_loss.append(loss.item())
+            running_loss += loss.item()
+            counter += images.shape[0]
 
-        training_loss = np.mean(running_loss)
-
-        return training_loss
+        return running_loss / counter
 
     # TODO: Perform one Pass on the validation set and return loss value. You may also update your best model here.
     def __val(self):
         self.__encoder.eval()
         self.__decoder.eval()
 
-        running_loss = []
-
+        running_loss = 0
+        
+        counter = 0
         with torch.no_grad():
             for i, (images, captions, _) in enumerate(self.__val_loader):
                 images, captions = images.cuda(), captions.cuda()
-                output = self.__model(images)
-
+#                 output = torch.from_numpy(self.__model(images).T).unsqueeze(2).cuda()
+                output = self.__model(images, captions)
                 # Calculate the loss.
-                loss = self.__criterion(
-                    output.view(-1, self.__vocab.__len__()), captions.view(-1))
-                running_loss.append(loss.item())
+#                 loss = self.__criterion2(output.reshape(-1, 1).float(), 
+#                                         torch.nn.functional.pad(captions, (0,3), 'constant', 0).view(-1))
+                loss = self.__criterion(output.view(-1, self.__vocab.__len__()), captions.view(-1))
+                print(loss.item())
+                running_loss += loss.item()
+                counter += images.shape[0]
 
-        val_loss = np.mean(running_loss)
-
-        return val_loss
+        return running_loss / counter
 
     # TODO: Implement your test function here. Generate sample captions and evaluate loss and
     #  bleu scores using the best model. Use utility functions provided to you in caption_utils.
     #  Note than you'll need image_ids and COCO object in this case to fetch all captions to generate bleu scores.
     def test(self):
-        self.__model.eval()
+        self.__encoder.eval()
+        self.__decoder.eval()
         test_loss = 0
         bleu1 = 0
         bleu4 = 0
 
         with torch.no_grad():
             for iter, (images, captions, img_ids) in enumerate(self.__test_loader):
-                raise NotImplementedError()
+                output = self.__model(images)
+                print(output.shape)
+                print(captions.shape)
+#                 loss = self.__criterion2(output.reshape(-1, 1).float(), 
+#                                         torch.nn.functional.pad(captions, (0,3), 'constant', 0).view(-1))
 
         result_str = "Test Performance: Loss: {}, Perplexity: {}, Bleu1: {}, Bleu4: {}".format(test_loss,
                                                                                                bleu1,
@@ -170,7 +177,7 @@ class Experiment(object):
     def __save_model(self):
         root_model_path = os.path.join(
             self.__experiment_dir, 'latest_model.pt')
-        model_dict = self.__model.state_dict()
+        model_dict = self.__model.decoder.state_dict()
         state_dict = {'model': model_dict,
                       'optimizer': self.__optimizer.state_dict()}
         torch.save(state_dict, root_model_path)

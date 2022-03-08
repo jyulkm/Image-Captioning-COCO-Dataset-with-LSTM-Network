@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from coco_dataset import collate_fn
 
 
 class resnet(nn.Module):
@@ -16,6 +17,7 @@ class resnet(nn.Module):
         # Changes the last layer of the pretrained model
         self.resnet.fc = nn.Linear(fc_input_feat_n, embed_size)
 
+        # freeze weights
         for name, param in self.resnet.named_parameters():
             if 'fc' in name:
                 param.requires_grad = True
@@ -53,49 +55,116 @@ class LSTM(nn.Module):
 
         self.max_len = max_len  # max length of caption
 
-    def __call__(self, features, captions):
-        return self.forward(features, captions)
+    def __call__(self, features, captions=None, hidden_state=None, cell_state=None):
+        return self.forward(features, captions, hidden_state=None, cell_state=None)
 
-    def train(self, features, captions):
-        captions = captions[:, :-1]
+    def transform_features(self, features, word_count):
+        """
+        reshapes features to make it ready for the LSTM model
+        """
+        return features.unsqueeze(1).repeat(1, word_count, 1)
 
-        # pad captions to ensure same length: required to put all captions across a minibatch in one tensor
-        captions = torch.nn.functional.pad(
-            input=captions, pad=(1, 0), mode='constant', value=0)
+    def transform_captions(self, captions, image_count):
+        """
+        reshapes captions to make it ready for the LSTM model
+        image_count: number of images (ie rows)
+        """
 
-        # embed captions to convert sparse one-hot-encoded matrix to something else
-        captions = self.embedding(captions)
+        lengths = [len(caption) for caption in captions]
+        targets = torch.zeros(len(captions), max(lengths)).long()
 
-        # reshape features from 2d to 3d: lstm requires a 3d tensor
-        features = features.unsqueeze(1).repeat(1, captions.shape[1], 1)
+        for i, cap in enumerate(captions):
+            end = lengths[i]
+            targets[i, :end] = cap[:end]
+
+        return self.embedding(targets.cuda())
+
+    def forward(self, features, captions, hidden_state=None, cell_state=None):
+        # reshape features
+        word_count = captions.shape[1]
+        features = self.transform_features(features, word_count)
+
+        # reshape captions
+        print(features.shape)
+        image_count = features.shape[0]
+        captions = self.transform_captions(captions, image_count)
 
         # combine features and captions to feed the LSTM model
         combined_input = torch.cat((features, captions), dim=2)
 
-        lstm_output, (hidden_state, cell_state) = self.lstm(combined_input)
+        if hidden_state == None:
+            lstm_output, (hidden_state, cell_state) = self.lstm(combined_input)
+        else:
+            lstm_output, (hidden_state, cell_state) = self.lstm(
+                combined_input, hidden_state, cell_state)
 
         linear_output = self.linear(lstm_output)
 
-        return linear_output
+        return linear_output, (hidden_state, cell_state)
 
 
 class baseline:
-    def __init__(self, hidden_size, embedding_size, vocab_size, num_layers, max_len):
+    def __init__(self, config_data, hidden_size, embedding_size, vocab_size, num_layers, max_len):
         # We suggest as a baseline model to use 2 layers of 512 LSTM units each, followed by a fully-connected layer to the softmax output.
 
         hidden_state = cell_state = 0
 
+        self.config_data = config_data
+        self.embedding_size = embedding_size
         self.encoder = resnet(embedding_size)
         self.decoder = LSTM(embedding_size, hidden_size,
                             vocab_size, num_layers)
         self.max_len = max_len
 
-    def __call__(self, image, captions):
-        self.train(image, captions)
+    def __call__(self, image, captions=None):
+        if captions != None:
+            return self.train(image, captions)
+        else:
+            self.test(image)
 
     def train(self, image, captions):
+        """
+        calls on forward() in one-go to perform teacher-forcing
+        """
         features = self.encoder(image)
-        return self.decoder.train(features, captions)
+        output, _ = self.decoder(features, captions)
+
+        return output
+
+    def test(self, image):
+        """
+        uses for-loop; no teacher-forcing 
+        """
+        deterministic = self.config_data['generation']['deterministic']
+        temperature = self.config_data['generation']['temperature']
+        num_of_images = image.shape[0]
+
+        features = self.encoder(image)
+        captions = torch.zeros(num_of_images, 1).cuda()
+
+        token_ids = []
+        token_ids_t = torch.empty(
+            num_of_images, self.max_len, self.embedding_size)
+        hidden_state = cell_state = None
+        for t in range(self.max_len):
+            output, (hidden_state, cell_state) = self.decoder(
+                features, captions, hidden_state, cell_state)
+            output = output.squeeze()
+
+            if deterministic:
+                token_id = output.argmax(dim=2).cpu().detach()
+            else:
+                token_id = nn.functional.softmax(
+                    output.div(temperature)).multinomial(1).view(-1)
+
+            print(token_id)
+            token_ids.append(token_id.cpu().numpy())
+            captions = token_id.unsqueeze(-1)
+            token_ids_t[t, :, :] = output
+
+        return token_ids_t
+
+        return output
 
     def deterministic_caption_generator(self, image, captions):
         token_ids = []
@@ -164,6 +233,6 @@ def get_model(config_data, vocab, num_layers=2):
     max_len = config_data['generation']['max_length']
 
     if model_type == 'RNN':
-        return baseline(hidden_size, embedding_size, vocab_size, num_layers, max_len)
-
-    # only use hidden step to generate the output
+        model = baseline(config_data, hidden_size,
+                         embedding_size, vocab_size, num_layers, max_len)
+        return model

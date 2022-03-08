@@ -8,6 +8,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
 from datetime import datetime
 
 from caption_utils import *
@@ -43,6 +44,7 @@ class Experiment(object):
         # Save your best model in this field and use this in test method.
         self.__best_model = None
         self.learning_rate = config_data['experiment']['learning_rate']
+        self.deterministic = self.__generation_config['deterministic']
 
         # Init Model
         self.__model = get_model(config_data, self.__vocab)
@@ -76,8 +78,7 @@ class Experiment(object):
             self.__optimizer.load_state_dict(state_dict['optimizer'])
 
         else:
-            ...
-#             os.makedirs(self.__experiment_dir)
+            os.makedirs(self.__experiment_dir)
 
     def __init_model(self):
         if torch.cuda.is_available():
@@ -94,7 +95,7 @@ class Experiment(object):
             self.__current_epoch = epoch
             train_loss = self.__train()
             val_loss = self.__val()
-            self.__record_stats(train_loss, val_loss)
+            self.__record_stats(train_loss, val_loss=0)
             self.__log_epoch_stats(start_time)
             self.__save_model()
 
@@ -103,13 +104,12 @@ class Experiment(object):
         self.__encoder.resnet.train()
         self.__decoder.lstm.train()
 
-        training_loss = 0
-        running_loss = 0
+        self.__optimizer.zero_grad()
+
+        running_loss = []
 
         for i, (images, captions, _) in enumerate(self.__train_loader):
             images, captions = images.cuda(), captions.cuda()
-
-            self.__optimizer.zero_grad()
 
             output = self.__model(images, captions)
 
@@ -120,21 +120,30 @@ class Experiment(object):
             self.__optimizer.step()
 
             # collect loss
-            running_loss += loss.item()
+            running_loss.append(loss.item())
 
-        # Avg. the loss accumulated across entire data set
-        training_loss = mean(running_loss)
+        training_loss = np.mean(running_loss)
 
         return training_loss
 
     # TODO: Perform one Pass on the validation set and return loss value. You may also update your best model here.
     def __val(self):
-        self.__model.eval()
-        val_loss = 0
+        self.__encoder.eval()
+        self.__decoder.eval()
+
+        running_loss = []
 
         with torch.no_grad():
             for i, (images, captions, _) in enumerate(self.__val_loader):
-                raise NotImplementedError()
+                images, captions = images.cuda(), captions.cuda()
+                output = self.__model(images)
+
+                # Calculate the loss.
+                loss = self.__criterion(
+                    output.view(-1, self.__vocab.__len__()), captions.view(-1))
+                running_loss.append(loss.item())
+
+        val_loss = np.mean(running_loss)
 
         return val_loss
 
@@ -167,8 +176,6 @@ class Experiment(object):
         torch.save(state_dict, root_model_path)
 
     def __record_stats(self, train_loss, val_loss):
-        print('$$$$$$$$$$$$$$$$$$$$$$$$$')
-        print(train_loss)
         self.__training_losses.append(train_loss)
         self.__val_losses.append(val_loss)
 

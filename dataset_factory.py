@@ -5,7 +5,8 @@
 # Winter 2022
 ################################################################################
 
-import csv, os
+import csv
+import os
 from torch.utils.data import DataLoader
 from pycocotools.coco import COCO
 
@@ -48,7 +49,7 @@ def get_coco_dataloader(img_ids_file_path, imgs_root_dir, annotation_file_path, 
         reader = csv.reader(f)
         img_ids = list(reader)
 
-    img_ids = [int(i) for i in img_ids[0]]
+    img_ids = [int(i) for i in img_ids[0][:1]]  # Tae: get rid of the last [:1]
 
     ann_ids = [coco_obj.imgToAnns[img_ids[i]][j]['id'] for i in range(0, len(img_ids)) for j in
                range(0, len(coco_obj.imgToAnns[img_ids[i]]))]
